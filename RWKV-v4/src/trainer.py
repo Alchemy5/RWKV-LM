@@ -26,7 +26,7 @@ else:
     torch.backends.cuda.matmul.allow_tf32 = True
 
 class TrainerConfig:
-    batch_size = 64
+    batch_size = 1
     learning_rate = 4e-4
     betas = (0.9, 0.99)
     eps = 1e-8
@@ -34,7 +34,7 @@ class TrainerConfig:
     warmup_tokens = 0
     final_tokens = 0
     epoch_save_frequency = 0
-    epoch_save_path = 'trained-'
+    epoch_save_path = 'saved_models/trained-'
     num_workers = 0  # for DataLoader
 
     def __init__(self, **kwargs):
@@ -56,6 +56,10 @@ class Trainer(LightningLite):
     def run(self, m_cfg, train_dataset, test_dataset, config):
         self.cuda_id = int(str(self.device).strip('cuda:'))
         print('[0]')
+        #import pdb;pdb.set_trace()
+        #for i in range(len(train_dataset["input_ids"])):
+        #    train_dataset["input_ids"][i].to("cuda")
+        #    train_dataset["labels"][i].to("cuda")
         model = GPT(GPTConfig(train_dataset.vocab_size, train_dataset.ctx_len, model_type=m_cfg.model_type,
                         n_layer=m_cfg.n_layer, n_embd=m_cfg.n_embd))
         print('[1]')
@@ -98,7 +102,7 @@ class Trainer(LightningLite):
             data = self.train_dataset if is_train else self.test_dataset
             data.idx_begin = self.steps * config.batch_size + 1
             data.cuda_id = self.cuda_id
-            
+            eval_loss = 0
             if config.num_workers > 0:
                 loader = DataLoader(data, shuffle=False, pin_memory=True,
                                     batch_size=config.batch_size // NUM_GPUS,
@@ -109,11 +113,11 @@ class Trainer(LightningLite):
                                     num_workers=config.num_workers)
 
             pbar = tqdm(enumerate(loader), total=len(
-                loader), bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}') if is_train else enumerate(loader)
+                loader), bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}') if is_train else tqdm(enumerate(loader), total=len(loader))
             loader = self.setup_dataloaders(loader)
             gc.collect()
             torch.cuda.empty_cache()
-            
+            eval_steps = 0
             for it, (x, y) in pbar:
                 with torch.set_grad_enabled(is_train):
                     loss = model(x, y) # forward the model
@@ -161,8 +165,8 @@ class Trainer(LightningLite):
                         now_loss += all_loss[gg].item()
                     now_loss = now_loss / NUM_GPUS # report progress                    
                     if USE_WANDB and self.cuda_id == 0:
-                        wandb.log({"loss": now_loss}, step = self.steps)
-
+                        wandb.log({"train_loss": now_loss}, step = self.steps)
+                        wandb.log({"train_ppl": math.exp(now_loss)}, step=self.steps)
                     if self.avg_loss < 0:
                         self.avg_loss = now_loss
                     else:
@@ -170,11 +174,27 @@ class Trainer(LightningLite):
                         self.avg_loss = self.avg_loss * (1.0 - factor) + now_loss * factor
 
                     pbar.set_description(f"miniE {epoch+1+self.EPOCH_BEGIN} s {self.steps} prog {progress*100.0:.2f}% : ppl {math.exp(self.avg_loss):.6f} loss {self.avg_loss:.6f} lr {lr:e}")
+                else:
+                    #print("Running eval...")
+                    # TODO only relevent to one gpu setup as of now
+                    eval_loss += all_loss[0].item()
+                    eval_steps += 1
+                    pbar.set_description(f"eval steps {eval_steps} loss {eval_loss}")
+
+                    
+            if not is_train:
+                eval_loss = eval_loss / eval_steps
+                wandb.log({"eval_loss": eval_loss}, step = self.epoch)
+                wandb.log({"eval_ppl": math.exp(eval_loss)}, step=self.epoch)
 
         self.tokens = 0  # counter used for learning rate decay
-        for epoch in range(99999999):
-
+        for epoch in range(11):
+            self.epoch = epoch
+            print("Running testing...") #TODO wandb isn't updating correctly
+            run_epoch('test')
+            print("Running training...")
             run_epoch('train')
+            
             if math.isnan(self.avg_loss):
                 exit(0)
 
