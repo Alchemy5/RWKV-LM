@@ -22,7 +22,7 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s - %(name)s - %(message)s
 # Step 1: set training data & cfg
 ########################################################################################################
 
-EXPRESS_PILE_MODE = False # True: express mode for fine-tuning a pile model // False: usual training
+EXPRESS_PILE_MODE = True # True: express mode for fine-tuning a pile model // False: usual training
 
 EXPRESS_PILE_MODEL_NAME = 'RWKV-4-Pile-169M-20220807-8023'
 EXPRESS_PILE_MODEL_TYPE = 'RWKV-4-Pile-169M'
@@ -32,18 +32,34 @@ EXPRESS_PILE_MODEL_TYPE = 'RWKV-4-Pile-169M'
 # EXPRESS_PILE_MODEL_TYPE = 'RWKV-4-Pile-1B5'
 
 ########################################################################################################
+import numpy as np
+from transformers import PreTrainedTokenizerFast
 
-datafile = "../data/enwik8" # your data
+datafile = "sample.txt" # your data
 datafile_encoding = 'utf-8' # 'utf-8' / 'utf-16le' / 'numpy' (for fine-tuning pile models) / 'binidx' (the Megatron-LM 'binidx' format)
 
 # datafile = 'my-gpt_seq_document'
 # datafile_encoding = 'binidx'
 
 if EXPRESS_PILE_MODE:
+    tokenizer = PreTrainedTokenizerFast(tokenizer_file=f'20B_tokenizer.json')
+    input_file = "sample.txt"
+    data_raw = open(input_file, encoding="utf-8").read()
+    #import pdb;pdb.set_trace()
+    data_code = tokenizer.encode(data_raw)
+    out = np.array(data_code, dtype='uint16')
+    split_index = int(0.8 * len(out))
+    train_data = out[:split_index]
+    test_data = out[split_index:]
+    import pdb;pdb.set_trace()
     datafile = 'train.npy' # use 'prepare-data.py' in https://github.com/BlinkDL/RWKV-v2-RNN-Pile/tree/main/RWKV-v3 to tokenize .txt into .npy
+    test_datafile = 'test.npy'
+    np.save(datafile, train_data, allow_pickle=False)
+    np.save(test_datafile, test_data, allow_pickle=False)
     datafile_encoding = 'numpy'
 
-#
+
+#import pdb;pdb.set_trace()
 # set VOCAB_SIZE = 0 (auto-compute) if you are training a char-level LM from scratch
 # set VOCAB_SIZE = 50277 for fine-tuning pile models
 # set VOCAB_SIZE = your_vocab_size for 'binidx' data
@@ -65,14 +81,14 @@ os.environ['RWKV_NUM_GPUS'] = '1' # num of GPUs to use
 # 'fp16' (fast & will overflow after training a large model for very long. can be solved in the future)
 # 'tf32' (decent speed & stable)
 # 'fp32' (!!!very slow!!! only for verification)
-os.environ['RWKV_FLOAT_MODE'] = 'bf16'
+os.environ['RWKV_FLOAT_MODE'] = 'fp16'
 
-os.environ['RWKV_DEEPSPEED'] = '1' # Use DeepSpeed? 0 = False, 1 = True
+os.environ['RWKV_DEEPSPEED'] = '0' # Use DeepSpeed? 0 = False, 1 = True
 
 if int(os.environ['RWKV_NUM_GPUS']) == 1: # Usually you don't need DeepSpeed for 1 GPU training.
     os.environ['RWKV_DEEPSPEED'] = '0'    # However, sometimes DeepSpeed saves VRAM even for 1 GPU training. So you shall try it.
 
-os.environ['USE_WANDB'] = '0' # wandb logging. 0 = False, 1 = True
+os.environ['USE_WANDB'] = '1' # wandb logging. 0 = False, 1 = True
 
 ########################################################################################################
 # Step 2: set model details
@@ -96,7 +112,7 @@ if EXPRESS_PILE_MODE:
     if EXPRESS_PILE_MODEL_TYPE == 'RWKV-4-Pile-169M':
         n_layer = 12
         n_embd = 768
-        ctx_len = 1024
+        ctx_len = 500
     elif EXPRESS_PILE_MODEL_TYPE == 'RWKV-4-Pile-430M':
         n_layer = 24
         n_embd = 1024
@@ -111,7 +127,7 @@ if EXPRESS_PILE_MODE:
 ########################################################################################################
 
 # if you see "CUDA out of memory", reduce batch_size. Use nvidia-smi to find the highest value for your GPU.
-batch_size = 12 * int(os.environ['RWKV_NUM_GPUS'])
+batch_size = 1 * int(os.environ['RWKV_NUM_GPUS'])
 assert (batch_size % int(os.environ['RWKV_NUM_GPUS']) == 0)
 
 # By default we are using exponential LR decay.
@@ -128,7 +144,7 @@ lr_init = 8e-4
 lr_final = 1e-5
 
 # the mini-epoch is very short and of fixed length (length = ctx_len * epoch_length_fixed tokens)
-n_epoch = 500
+n_epoch = 10
 epoch_length_fixed = (10000 // batch_size) * batch_size # feel free to increase it if you have lots of GPU
 
 # epoch_save_frequency 0 = never, 1 = every mini-epoch, 2 = every two mini-epochs, ...
@@ -141,12 +157,12 @@ if EXPRESS_PILE_MODE:
     else:
         lr_init = 1e-5
     lr_final = 1e-5
-    n_epoch = 100000
-
+    n_epoch = 10
+#import pdb;pdb.set_trace()
 ### misc stuffs ########################################################################################
 
 if LOAD_MODEL and EPOCH_BEGIN > 0: # we are not saving gradients, so let's have some warmup if we load a model
-    warmup_tokens = 50 * ctx_len * batch_size // NUM_GPUS
+    warmup_tokens = 50 * ctx_len * batch_size // 1
 else:
     warmup_tokens = 0
 
@@ -180,9 +196,10 @@ if datafile_encoding == 'binidx':
     train_dataset = Dataset(MMapIndexedDataset(datafile), ctx_len, epoch_length_fixed)
 elif datafile_encoding == 'numpy':
     train_dataset = Dataset(np.load(datafile).astype('int'), ctx_len, epoch_length_fixed)
+    test_dataset = Dataset(np.load(test_datafile).astype('int'), ctx_len, epoch_length_fixed)
 else:
     train_dataset = Dataset(open(datafile, "r", encoding=datafile_encoding).read(), ctx_len, epoch_length_fixed)
-
+#import pdb;pdb.set_trace()
 ########################################################################################################
 # Train model
 ########################################################################################################
@@ -217,7 +234,7 @@ if __name__ == '__main__':
         DEEPSPEED_CFG = {
             "zero_allow_untested_optimizer":True,
             "zero_optimization":{
-                "stage":2,
+                "stage":3,
                 "contiguous_gradients":True,
                 "overlap_comm":True,
                 "allgather_partitions":True,
@@ -276,5 +293,6 @@ if __name__ == '__main__':
             trainer = Trainer(strategy=DeepSpeedStrategy(config=DEEPSPEED_CFG), devices=NUM_GPUS, accelerator="gpu", precision=32)
 
         print(trainer._strategy.config)
-    
-    trainer.run(m_cfg, train_dataset, None, tconf)
+    # TODO Add in val dataset investigate more
+
+    trainer.run(m_cfg, train_dataset, test_dataset, tconf)
