@@ -61,7 +61,7 @@ class Trainer(LightningLite):
         #    train_dataset["input_ids"][i].to("cuda")
         #    train_dataset["labels"][i].to("cuda")
         model = GPT(GPTConfig(train_dataset.vocab_size, train_dataset.ctx_len, model_type=m_cfg.model_type,
-                        n_layer=m_cfg.n_layer, n_embd=m_cfg.n_embd))
+                        n_layer=m_cfg.n_layer, n_embd=m_cfg.n_embd, use_k = m_cfg.use_k, out_gate = m_cfg.out_gate, mix_times = m_cfg.mix_times))
         print('[1]')
         with torch.no_grad():
             if m_cfg.LOAD_MODEL:
@@ -88,7 +88,7 @@ class Trainer(LightningLite):
                 cfg = model.config
                 for k in config.__dict__:
                     setattr(cfg, k, config.__dict__[k]) # combine cfg
-                wandb.init(project="RWKV-LM", name=self.get_run_name() + '-' + datetime.datetime.today().strftime('%Y-%m-%d-%H-%M-%S'), config=cfg, save_code=False)
+                wandb.init(project="RWKV-LM", name=f"Use k = {m_cfg.use_k} out_gate = {m_cfg.out_gate} time_mixing = {m_cfg.mix_times}", config=cfg, save_code=False)
 
         model, config = self.model, self.config
         raw_model = model.module if hasattr(self.model, "module") else model

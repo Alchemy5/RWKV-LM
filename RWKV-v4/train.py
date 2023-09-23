@@ -1,13 +1,24 @@
 ########################################################################################################
 # The RWKV Language Model - https://github.com/BlinkDL/RWKV-LM
 ########################################################################################################
+
 import os
 import logging, types
 from src.utils import Dataset
 import torch
 import numpy as np
+import argparse
 from src.binidx import MMapIndexedDataset
 
+parser = argparse.ArgumentParser(description='RWKV-v4')
+#whether to use k
+parser.add_argument('--use_k', action="store_true", help='whether to use k')
+#whether to use out gate
+parser.add_argument('--out_gate', action="store_true", help='whether to use out gate')
+#whether to use time mixing
+parser.add_argument('--time_mixing', action="store_true", help='whether to use time mixing')
+
+args = parser.parse_args()
 np.set_printoptions(precision=4, suppress=True, linewidth=200)
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
                     datefmt="%Y-%m-%d %H:%M:%S", level=logging.INFO,)
@@ -46,11 +57,12 @@ if EXPRESS_PILE_MODE:
     data_raw = open(input_file, encoding="utf-8").read()
     #import pdb;pdb.set_trace()
     data_code = tokenizer.encode(data_raw)
+    #import pdb;pdb.set_trace()
     out = np.array(data_code, dtype='uint16')
     split_index = int(0.8 * len(out))
     train_data = out[:split_index]
     test_data = out[split_index:]
-    import pdb;pdb.set_trace()
+    #import pdb;pdb.set_trace()
     datafile = 'train.npy' # use 'prepare-data.py' in https://github.com/BlinkDL/RWKV-v2-RNN-Pile/tree/main/RWKV-v3 to tokenize .txt into .npy
     test_datafile = 'test.npy'
     np.save(datafile, train_data, allow_pickle=False)
@@ -219,6 +231,9 @@ if __name__ == '__main__':
     m_cfg.EPOCH_BEGIN = EPOCH_BEGIN
     m_cfg.LOAD_MODEL = LOAD_MODEL
     m_cfg.MODEL_NAME = MODEL_NAME
+    m_cfg.use_k = (args.use_k)
+    m_cfg.out_gate = (args.out_gate)
+    m_cfg.mix_times = (args.time_mixing)
 
     if os.environ['RWKV_DEEPSPEED'] == '0':
         if os.environ['RWKV_FLOAT_MODE'] == 'fp16':
@@ -293,5 +308,4 @@ if __name__ == '__main__':
 
         print(trainer._strategy.config)
     # TODO Add in val dataset investigate more
-
     trainer.run(m_cfg, train_dataset, test_dataset, tconf)
